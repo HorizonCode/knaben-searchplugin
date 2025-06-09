@@ -9,7 +9,7 @@ from novaprinter import prettyPrinter
 
 
 class knaben(object):
-    url = "https://knaben.eu"
+    url = "https://knaben.org"
     name = "Knaben Database"
     supported_categories = {
         "all": "",
@@ -20,12 +20,14 @@ class knaben(object):
         "music": [1000000, 1001000, 1002000, 1003000, 1004000, 1005000, 1006000],
         "software": [4002000, 4003000, 4004000],
         "tv": [2000000, 2001000, 2002000, 2003000, 2004000, 2005000, 2006000, 2007000, 2008000]
-        }
+    }
+
+    __max_redirects = 3  # Worst case will redirect 3 times, old domain -> new domain -> new path
 
     def search(self, what, cat):
         what = unquote(what)
 
-        search_url = "https://api.knaben.eu/v1"
+        search_url = "https://api.knaben.org/v1"
         body = {
             "search_field": "title",
             "query": what,
@@ -48,8 +50,16 @@ class knaben(object):
         response_json = json.loads(response)
 
         for torrent in response_json["hits"]:
+            link = None
+            if "magnetUrl" in torrent and torrent["magnetUrl"] is not None:
+                link = torrent["magnetUrl"]
+            elif "link" in torrent and torrent["link"] is not None:
+                link = torrent["link"]
+            else:
+                continue
+
             result = {
-                "link": torrent["link"] if "link" in torrent else torrent["magnetUrl"],
+                "link": link,
                 "name": torrent["title"],
                 "size": self.bytes_to_human_readable(torrent["bytes"]),
                 "seeds": torrent["seeders"],
@@ -59,21 +69,25 @@ class knaben(object):
             }
             prettyPrinter(result)
 
-    def request(self, url, data, headers=None):
+    def request(self, url, data, headers=None, redirect_counter=0):
         try:
-            # Parse the URL
+            if redirect_counter > self.__max_redirects:
+                raise Exception("Maximum redirects")
             parsed_url = urlparse(url)
             conn = HTTPSConnection(parsed_url.netloc)
-            # Set default headers if none are provided
             if headers is None:
                 headers = {
                     "Content-Type": "application/json",
                     "User-Agent": "knaben-searchplugin"
                 }
-            # Make the POST request
+
             conn.request("POST", parsed_url.path, json.dumps(data), headers)
-            # Get the response
             response = conn.getresponse()
+            location = response.getheader('Location')
+            if response.status in [301, 307, 308] and location is not None:
+                conn.close()
+                return self.request(location, data, headers, redirect_counter + 1)
+
             response_data = response.read()
 
             conn.close()
